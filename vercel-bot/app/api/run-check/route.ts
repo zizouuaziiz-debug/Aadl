@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const response = await fetch(RAILWAY_API_URL, {
+    const response = await fetch(`${RAILWAY_API_URL}/run`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
