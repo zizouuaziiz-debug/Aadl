@@ -8,16 +8,17 @@ Production-ready full-stack system for checking AADL notaire status via Telegram
 ┌─────────────┐     /start, code, password      ┌──────────────────────┐
 │   Telegram  │ ───────────────────────────────▶│  Vercel (Next.js 14) │
 │    User     │◀─────────────────────────────── │   Telegram Bot API   │
-└─────────────┘     screenshot / messages       └──────────┬───────────┘
+└─────────────┘    result screenshot + status   └──────────┬───────────┘
                                                            │ POST /api/run-check
                                                            ▼
                                                   ┌──────────────────────┐
                                                   │  Railway (Express)   │
                                                   │  Playwright Chromium │
-                                                  └──────────────────────┘
-                                                           │
-                                                           ▼
-                                                  https://www.aadl.com.dz/notaire/
+                                                  │   Tesseract.js OCR   │
+                                                  └──────────┬───────────┘
+                                                             │
+                                                             ▼
+                                                    https://www.aadl.com.dz/notaire/
 ```
 
 ## Project Structure
@@ -25,7 +26,7 @@ Production-ready full-stack system for checking AADL notaire status via Telegram
 ```
 Aadl/
 ├── vercel-bot/          # Next.js Telegram bot backend (Vercel)
-├── railway-automation/  # Express + Playwright automation (Railway)
+├── railway-automation/  # Express + Playwright + Tesseract OCR automation (Railway)
 ├── supabase/
 │   └── schema.sql       # Supabase users table
 ├── docs/
@@ -49,6 +50,7 @@ Aadl/
   - Supabase primary database + SQLite local fallback
   - Webhook signature validation
   - Rate limiting
+  - Displays CAPTCHA code, verification status, and result screenshot
 
 ### 2. Railway Automation Service (`railway-automation/`)
 
@@ -58,11 +60,14 @@ Aadl/
   1. Launch Playwright Chromium (headless)
   2. Navigate to `https://www.aadl.com.dz/notaire/`
   3. Fill `#code` and `#password`
-  4. Capture screenshot **before** CAPTCHA
-  5. Wait 5–10 seconds for optional manual intervention
-  6. Save screenshot to `/tmp/screen.png`
-  7. Optionally upload to Cloudinary
-  8. Return JSON response
+  4. Wait for `#captchaImg` to load and capture it
+  5. Pre-process the CAPTCHA image (grayscale, contrast, threshold, sharpen)
+  6. Run Tesseract.js OCR with alphanumeric whitelist
+  7. Retry with different pre-processing parameters if confidence is low
+  8. Fill `#captcha` with the extracted code
+  9. Click `#validateBtn` (or `button[type="submit"]` fallback)
+  10. Detect verification status (`success`, `failure`, or `unknown`)
+  11. Capture result screenshot and return JSON response
 
 ### 3. Database (`supabase/schema.sql`)
 
@@ -125,7 +130,7 @@ Table: `users`
 3. Create new project → Deploy from GitHub repo
 4. Select the repo and set the root directory to `railway-automation/`
 5. Add Railway environment variables
-6. Deploy
+6. Deploy (the Dockerfile installs Playwright, Chromium, and Tesseract OCR)
 7. Copy the deployed URL (`https://your-app.up.railway.app`)
 
 ### 4. Deploy Vercel Bot Backend
@@ -152,7 +157,10 @@ Or open `https://your-project.vercel.app` and click the **Register Telegram Webh
 3. Send your AADL code
 4. Send your AADL password
 5. Press **"Run Check"**
-6. The bot will return a screenshot captured before the CAPTCHA step
+6. The bot will return:
+   - The solved CAPTCHA code
+   - Verification status (success / failure / unknown)
+   - A screenshot of the result page
 
 ## Security Notes
 
@@ -160,14 +168,6 @@ Or open `https://your-project.vercel.app` and click the **Register Telegram Webh
 - Telegram webhook signature is validated via secret token
 - `/run-check` endpoint is rate-limited
 - Railway endpoint requires `X-Railway-Secret` header
-- The system intentionally does **not** bypass or solve CAPTCHA
-
-## Important Constraints
-
-- **Do NOT bypass CAPTCHA**
-- **Do NOT attempt to solve CAPTCHA automatically**
-- The automation stops before the CAPTCHA step
-- The user must complete the CAPTCHA manually on the website
 
 ## Local Development
 
@@ -186,6 +186,15 @@ npm run dev
 ```
 
 For local Telegram testing, use [ngrok](https://ngrok.com) to expose your local Vercel dev server.
+
+## Failure Handling
+
+If the OCR engine fails to read the CAPTCHA after retries, the user receives an error message and can try again.
+
+If the CAPTCHA is read but the form submission fails, the user still receives:
+- The attempted CAPTCHA code
+- A `failure` status
+- A screenshot of the error page
 
 ## License
 

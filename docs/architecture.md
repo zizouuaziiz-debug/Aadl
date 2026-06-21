@@ -28,11 +28,27 @@ A simple in-memory rate limiter is used for both message handling and `/run-chec
               └─> encrypt & save password
                   └─> show "Run Check" button
                       └─> call Railway
-                          └─> send screenshot
+                          └─> Playwright fills credentials
+                              └─> OCR solves CAPTCHA
+                                  └─> submit form
+                                      └─> detect status
+                                          └─> send screenshot + status
 ```
+
+## CAPTCHA OCR Pipeline
+
+1. **Capture**: Playwright screenshots the `#captchaImg` element.
+2. **Pre-process**: `sharp` converts the image to grayscale, normalizes contrast, applies threshold binarization, and sharpens.
+3. **OCR**: `tesseract.js` reads the image with an alphanumeric whitelist and `PSM.SINGLE_WORD` mode.
+4. **Retry**: If confidence is below `MIN_CONFIDENCE`, the pipeline retries with different threshold/sharpen settings.
+5. **Submit**: Playwright fills `#captcha` and clicks `#validateBtn`.
+6. **Detect status**: The service checks whether the URL changed (success) or an error indicator appeared (failure).
+7. **Return**: The final screenshot, CAPTCHA code, confidence, and status are returned to Vercel.
 
 ## Error Handling
 
 - Database errors return a 500 response to Telegram (Telegram will retry)
 - Railway errors are sent back to the user as a Telegram message
 - Missing credentials prompt the user to run `/start`
+- CAPTCHA OCR failures return `status: "error"` so the user can retry
+- Form submission failures return `verification_status: "failure"` with a screenshot

@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cloudinary = require('./lib/cloudinary');
+const { solveCaptcha } = require('./ocr-utils');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +21,7 @@ app.use(express.json());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
+  windowMs: 1 * 60 * 1000, // 1 minute / دقيقة واحدة
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
@@ -34,6 +35,7 @@ app.get('/health', (_req, res) => {
 });
 
 // Authorization middleware
+// تأكد من صحة المفتاح السري المشترك بين Vercel وRailway
 function authorizeRailway(req, res, next) {
   const secret = req.headers['x-railway-secret'];
   if (!RAILWAY_API_SECRET) {
@@ -88,10 +90,103 @@ function fileToBase64(filePath) {
   }
 }
 
+/**
+ * Wait for the CAPTCHA image to be loaded and visible.
+ * انتظر حتى تحميل صورة CAPTCHA وظهورها.
+ *
+ * @param {import('playwright').Page} page
+ * @param {number} timeout
+ */
+async function waitForCaptchaImage(page, timeout = 15000) {
+  await page.waitForSelector('#captchaImg', { state: 'visible', timeout });
+
+  // Ensure the image element has a valid source and non-zero dimensions
+  // تأكد من أن عنصر الصورة يحتوي على مصدر صالح وأبعاد غير صفرية
+  await page.waitForFunction(
+    () => {
+      const img = document.querySelector('#captchaImg');
+      return img && img.naturalWidth > 0 && img.naturalHeight > 0;
+    },
+    { timeout }
+  );
+}
+
+/**
+ * Capture the CAPTCHA image element to a file.
+ * التقاط عنصر صورة CAPTCHA وحفظه في ملف.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} outputPath
+ */
+async function captureCaptchaImage(page, outputPath) {
+  const captchaImg = page.locator('#captchaImg');
+  await captchaImg.screenshot({ path: outputPath, type: 'png' });
+}
+
+/**
+ * Detect whether the form submission succeeded, failed, or is unknown.
+ * تحديد ما إذا كان إرسال النموذج ناجحاً، فاشلاً، أو غير معروف.
+ *
+ * Heuristics:
+ * - If the URL changed away from the login page, treat as success.
+ * - If an error message selector is visible, treat as failure.
+ * - Otherwise, treat as unknown.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} initialUrl
+ * @returns {Promise<string>} 'success' | 'failure' | 'unknown'
+ */
+async function detectVerificationStatus(page, initialUrl) {
+  const currentUrl = page.url();
+
+  // Success: page navigated away from the login form
+  // نجاح: انتقلت الصفحة بعيداً عن نموذج تسجيل الدخول
+  if (currentUrl !== initialUrl) {
+    return 'success';
+  }
+
+  // Failure: common error indicators on AADL-like pages
+  // فشل: مؤشرات خطأ شائعة في صفحات مشابهة لـ AADL
+  const errorSelectors = [
+    '.alert-danger',
+    '.error-message',
+    '.text-danger',
+    '[role="alert"]',
+  ];
+
+  for (const selector of errorSelectors) {
+    const visible = await page.locator(selector).isVisible().catch(() => false);
+    if (visible) return 'failure';
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Submit the login form with credentials and the solved CAPTCHA.
+ * إرسال نموذج تسجيل الدخول مع بيانات الاعتماد وCAPTCHA المحلول.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} captchaCode
+ */
+async function submitFormWithCaptcha(page, captchaCode) {
+  await page.fill('#captcha', captchaCode);
+
+  // Click the validation button, falling back to the first submit button
+  // اضغط على زر التحقق، مع الرجوع إلى زر الإرسال الأول
+  const validateButton = page.locator('#validateBtn');
+  if (await validateButton.count() > 0) {
+    await validateButton.click();
+  } else {
+    await page.locator('button[type="submit"]').first().click();
+  }
+}
+
 // Main automation endpoint
 app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
   const { chat_id, code, password } = req.body;
   const screenshotPath = '/tmp/screen.png';
+  const captchaPath = '/tmp/captcha_raw.png';
 
   let browser;
   try {
@@ -115,14 +210,15 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
     });
 
     const page = await context.newPage();
+    const initialUrl = 'https://www.aadl.com.dz/notaire/';
 
     console.log(`[${chat_id}] Navigating to AADL notaire page...`);
-    await page.goto('https://www.aadl.com.dz/notaire/', {
+    await page.goto(initialUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
 
-    // Wait for form fields
+    // Wait for form fields / انتظر حقول النموذج
     await page.waitForSelector('#code', { timeout: 10000 });
     await page.waitForSelector('#password', { timeout: 10000 });
 
@@ -130,18 +226,42 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
     await page.fill('#code', code);
     await page.fill('#password', password);
 
-    // Optional: trigger any UI state changes
-    await page.click('#code');
-    await page.click('#password');
+    // Wait for and capture the CAPTCHA image
+    // انتظر صورة CAPTCHA والتقطها
+    console.log(`[${chat_id}] Waiting for CAPTCHA image...`);
+    await waitForCaptchaImage(page);
+    await captureCaptchaImage(page, captchaPath);
+    console.log(`[${chat_id}] CAPTCHA image saved to ${captchaPath}`);
 
-    // Take screenshot BEFORE any CAPTCHA interaction
-    console.log(`[${chat_id}] Capturing screenshot before CAPTCHA...`);
+    // Solve the CAPTCHA using OCR
+    // حل CAPTCHA باستخدام OCR
+    console.log(`[${chat_id}] Running OCR on CAPTCHA...`);
+    const { code: captchaCode, confidence, attempts } = await solveCaptcha(captchaPath);
+
+    if (!captchaCode) {
+      throw new Error('CAPTCHA OCR failed: could not extract any text after retries');
+    }
+
+    console.log(`[${chat_id}] CAPTCHA solved: "${captchaCode}" (confidence: ${confidence})`);
+
+    // Submit the form with the solved CAPTCHA
+    // أرسل النموذج مع CAPTCHA المحلول
+    console.log(`[${chat_id}] Submitting form with CAPTCHA...`);
+    await submitFormWithCaptcha(page, captchaCode);
+
+    // Wait for the result to load
+    // انتظر تحميل النتيجة
+    await page.waitForTimeout(3000);
+
+    // Detect success or failure
+    // تحديد النجاح أو الفشل
+    const verificationStatus = await detectVerificationStatus(page, initialUrl);
+    console.log(`[${chat_id}] Verification status: ${verificationStatus}`);
+
+    // Capture the final result screenshot
+    // التقط صورة للنتيجة النهائية
+    console.log(`[${chat_id}] Capturing result screenshot...`);
     await page.screenshot({ path: screenshotPath, fullPage: false });
-
-    // Wait 5-10 seconds for manual CAPTCHA completion (optional delay)
-    const delayMs = Math.floor(Math.random() * 5000) + 5000;
-    console.log(`[${chat_id}] Waiting ${delayMs}ms for manual intervention window...`);
-    await page.waitForTimeout(delayMs);
 
     await browser.close();
     browser = null;
@@ -151,10 +271,14 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
 
     return res.json({
       status: 'ok',
-      message: 'Screenshot captured before CAPTCHA. Complete the CAPTCHA manually on the website.',
+      message: `CAPTCHA solved and submitted. Verification status: ${verificationStatus}.`,
       chat_id,
+      captcha_code: captchaCode,
+      captcha_confidence: confidence,
+      verification_status: verificationStatus,
       image_url: imageUrl,
       image_base64: imageBase64 ? `data:image/png;base64,${imageBase64}` : undefined,
+      ocr_attempts: attempts,
     });
   } catch (error) {
     console.error(`[${chat_id}] Automation error:`, error);

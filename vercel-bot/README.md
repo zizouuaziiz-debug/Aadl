@@ -10,6 +10,7 @@ Next.js 14 backend that powers the AADL Telegram bot using webhooks.
 - Supabase primary database with SQLite local fallback
 - "Run Check" inline keyboard
 - Calls Railway Playwright automation service (`/api/run-check`)
+- Receives CAPTCHA code, verification status, and result screenshot
 - Telegram webhook signature validation
 - Rate limiting
 
@@ -30,7 +31,12 @@ Next.js 14 backend that powers the AADL Telegram bot using webhooks.
 5. User replies with password
 6. Bot saves encrypted password and shows **"Run Check"** button
 7. User presses button
-8. Bot calls Railway automation service and sends back the screenshot
+8. Bot calls Railway automation service
+9. Railway solves the CAPTCHA with OCR, submits the form, and returns the result
+10. Bot sends the user:
+    - The solved CAPTCHA code
+    - Verification status (success / failure / unknown)
+    - A screenshot of the result page
 
 ## Environment Variables
 

@@ -5,6 +5,17 @@ import { rateLimit } from '@/lib/rate-limit';
 const RAILWAY_API_URL = process.env.RAILWAY_API_URL;
 const RAILWAY_API_SECRET = process.env.RAILWAY_API_SECRET;
 
+/**
+ * Proxy endpoint that triggers the Railway automation service.
+ * نقطة نهاية وسيطة لتشغيل خدمة الأتمتة على Railway.
+ *
+ * The automation service now returns:
+ * - captcha_code: the OCR-extracted CAPTCHA value
+ * - captcha_confidence: OCR confidence score
+ * - verification_status: 'success' | 'failure' | 'unknown'
+ * - image_url / image_base64: result screenshot
+ * - ocr_attempts: details of each OCR retry
+ */
 export async function POST(req: NextRequest) {
   try {
     const ip = req.ip || req.headers.get('x-forwarded-for') || 'unknown';
@@ -58,6 +69,8 @@ export async function POST(req: NextRequest) {
       message: 'Invalid response from automation service',
     }));
 
+    // Pass through the full automation response including CAPTCHA details
+    // تمرير الرد الكامل من خدمة الأتمتة بما في ذلك تفاصيل CAPTCHA
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
     console.error('/api/run-check error:', error);

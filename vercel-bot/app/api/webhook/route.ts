@@ -145,18 +145,44 @@ async function handleCallback(callbackQuery: any) {
     if (data.status !== 'ok') {
       await sendMessage(
         chatId,
-        `❌ Check failed:\n<pre>${escapeHtml(data.message || 'Unknown error')}</pre>`
+        `❌ Check failed:\n<pre>${escapeHtml(data.message || 'Unknown error')}</pre>\n\n` +
+          'Please try again. If the problem persists, the CAPTCHA may be unreadable.'
       );
       return;
     }
 
-    const caption = '📸 Screenshot captured before CAPTCHA.';
+    const status = data.verification_status || 'unknown';
+    const captchaCode = data.captcha_code || 'N/A';
+    const confidence = data.captcha_confidence || 0;
+
+    // Build a user-friendly caption in Arabic and English
+    // إنشاء تعليق ودي للمستخدم بالعربية والإنجليزية
+    let caption = '';
+    if (status === 'success') {
+      caption =
+        '✅ <b>Verification successful</b> / <b>تم التحقق بنجاح</b>\n\n' +
+        `🔢 CAPTCHA: <code>${escapeHtml(String(captchaCode))}</code>\n` +
+        `🎯 Confidence: ${Math.round(Number(confidence))}%`;
+    } else if (status === 'failure') {
+      caption =
+        '❌ <b>Verification failed</b> / <b>فشل التحقق</b>\n\n' +
+        `🔢 CAPTCHA used: <code>${escapeHtml(String(captchaCode))}</code>\n` +
+        `🎯 OCR confidence: ${Math.round(Number(confidence))}%\n\n` +
+        'The CAPTCHA may have been read incorrectly, or the credentials are invalid.';
+    } else {
+      caption =
+        '⚠️ <b>Verification status unknown</b> / <b>حالة التحقق غير معروفة</b>\n\n' +
+        `🔢 CAPTCHA used: <code>${escapeHtml(String(captchaCode))}</code>\n` +
+        `🎯 OCR confidence: ${Math.round(Number(confidence))}%\n\n` +
+        'Please review the screenshot below.';
+    }
+
     if (data.image_url) {
       await sendPhoto(chatId, data.image_url, caption);
     } else if (data.image_base64) {
       await sendPhotoBase64(chatId, data.image_base64, caption);
     } else {
-      await sendMessage(chatId, '✅ Check completed but no screenshot was returned.');
+      await sendMessage(chatId, caption);
     }
   } catch (error) {
     console.error('Run check error:', error);

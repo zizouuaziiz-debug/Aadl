@@ -1,6 +1,7 @@
 FROM node:18-slim
 
-# Install Playwright dependencies
+# Install Playwright dependencies and Tesseract OCR
+# تثبيت تبعيات Playwright و Tesseract OCR
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libatk-bridge2.0-0 \
@@ -10,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libatspi2.0-0 \
     libxshmfence-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libtesseract-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,6 +22,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 # Install Playwright browsers
+# تثبيت متصفحات Playwright
 RUN npx playwright install chromium
 
 COPY . .
