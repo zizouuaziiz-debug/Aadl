@@ -26,7 +26,7 @@ export function rateLimit(identifier: string, maxRequests: number, windowMs: num
 // Simple memory-based cleanup every 10 minutes
 setInterval(() => {
   const now = Date.now();
-  for (const [key, record] of clients.entries()) {
+  for (const [key, record] of Array.from(clients.entries())) {
     if (now > record.resetAt) {
       clients.delete(key);
     }
