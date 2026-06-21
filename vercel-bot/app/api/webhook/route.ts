@@ -14,14 +14,13 @@ const RAILWAY_API_URL = process.env.RAILWAY_API_URL;
 const RAILWAY_API_SECRET = process.env.RAILWAY_API_SECRET;
 
 function validateSecret(req: NextRequest): boolean {
-  if (!WEBHOOK_SECRET) return true; // allow if not configured (dev mode)
+  if (!WEBHOOK_SECRET) return true;
   const header = req.headers.get('x-telegram-bot-api-secret-token');
   return header === WEBHOOK_SECRET;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // سجل وصول الطلب
     console.log('🔵 Webhook received at', new Date().toISOString());
 
     if (!validateSecret(req)) {
@@ -133,7 +132,6 @@ async function handleCallback(callbackQuery: any) {
     console.log(`📤 Sending request to Railway: ${RAILWAY_API_URL}/run`);
     console.log(`🔑 RAILWAY_API_SECRET is ${RAILWAY_API_SECRET ? '✅ SET' : '❌ MISSING'}`);
 
-    // ✅ التعديل الأساسي: أضفنا /run إلى الرابط
     const response = await fetch(`${RAILWAY_API_URL}/run`, {
       method: 'POST',
       headers: {
@@ -157,10 +155,13 @@ async function handleCallback(callbackQuery: any) {
     console.log(`📦 Railway response data:`, JSON.stringify(data).substring(0, 300));
 
     if (data.status !== 'ok') {
+      const errorMsg = data.message || 'Unknown error';
+      const shortMsg = errorMsg.length > 200 ? errorMsg.substring(0, 200) + '...' : errorMsg;
+
       await sendMessage(
         chatId,
-        `❌ Check failed:\n<pre>${escapeHtml(data.message || 'Unknown error')}</pre>\n\n` +
-          'Please try again. If the problem persists, the CAPTCHA may be unreadable.'
+        `❌ Check failed:\n<pre>${escapeHtml(shortMsg)}</pre>\n\n` +
+        'Please try again. If the problem persists, the CAPTCHA may be unreadable.'
       );
       return;
     }
