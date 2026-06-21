@@ -21,11 +21,17 @@ function validateSecret(req: NextRequest): boolean {
 
 export async function POST(req: NextRequest) {
   try {
+    // سجل وصول الطلب
+    console.log('🔵 Webhook received at', new Date().toISOString());
+
     if (!validateSecret(req)) {
+      console.warn('⚠️ Unauthorized webhook request');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const body = await req.json();
+    console.log('📦 Webhook body:', JSON.stringify(body).substring(0, 200));
+
     const message = body.message;
     const callbackQuery = body.callback_query;
 
@@ -39,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error('Webhook error:', error);
+    console.error('❌ Webhook error:', error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }
@@ -124,7 +130,11 @@ async function handleCallback(callbackQuery: any) {
       return;
     }
 
-    const response = await fetch(RAILWAY_API_URL, {
+    console.log(`📤 Sending request to Railway: ${RAILWAY_API_URL}/run`);
+    console.log(`🔑 RAILWAY_API_SECRET is ${RAILWAY_API_SECRET ? '✅ SET' : '❌ MISSING'}`);
+
+    // ✅ التعديل الأساسي: أضفنا /run إلى الرابط
+    const response = await fetch(`${RAILWAY_API_URL}/run`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -137,10 +147,14 @@ async function handleCallback(callbackQuery: any) {
       }),
     });
 
+    console.log(`📥 Railway response status: ${response.status}`);
+
     const data = await response.json().catch(() => ({
       status: 'error',
       message: 'Invalid response from automation service',
     }));
+
+    console.log(`📦 Railway response data:`, JSON.stringify(data).substring(0, 300));
 
     if (data.status !== 'ok') {
       await sendMessage(
@@ -155,8 +169,6 @@ async function handleCallback(callbackQuery: any) {
     const captchaCode = data.captcha_code || 'N/A';
     const confidence = data.captcha_confidence || 0;
 
-    // Build a user-friendly caption in Arabic and English
-    // إنشاء تعليق ودي للمستخدم بالعربية والإنجليزية
     let caption = '';
     if (status === 'success') {
       caption =
@@ -185,7 +197,7 @@ async function handleCallback(callbackQuery: any) {
       await sendMessage(chatId, caption);
     }
   } catch (error) {
-    console.error('Run check error:', error);
+    console.error('❌ Run check error:', error);
     await sendMessage(chatId, '❌ An error occurred while running the check.');
   }
 }
