@@ -11,7 +11,7 @@ const cloudinary = require('./lib/cloudinary');
 const { solveCaptcha } = require('./ocr-utils');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const RAILWAY_API_SECRET = process.env.RAILWAY_API_SECRET;
 
 // Middleware
