@@ -1,0 +1,11 @@
+{
+  "builds": [
+    {
+      "src": "vercel-bot/**",
+      "use": "@vercel/next"
+    }
+  ],
+  "installCommand": "cd vercel-bot && npm install",
+  "buildCommand": "cd vercel-bot && npm run build",
+  "outputDirectory": "vercel-bot/.next"
+}
