@@ -4,7 +4,7 @@
  *
  * This module:
  * - Pre-processes CAPTCHA images (grayscale, contrast, threshold, sharpen)
- * - Runs Tesseract.js OCR with alphanumeric whitelist
+ * - Runs Tesseract.js OCR with numeric whitelist ONLY (because AADL CAPTCHA uses digits)
  * - Retries with different pre-processing parameters on failure
  * - Cleans and validates the extracted text
  */
@@ -15,16 +15,14 @@ const { createWorker, PSM } = require('tesseract.js');
 
 // Minimum confidence required for an OCR attempt to be accepted
 // الحد الأدنى للثقة المطلوبة لقبول محاولة OCR
-const MIN_CONFIDENCE = 60;
+const MIN_CONFIDENCE = 50; // ✅ خفضت قليلاً لأن الأرقام أسهل
 
 // Maximum number of OCR retries with different image pre-processing settings
 // أقصى عدد من محاولات OCR مع إعدادات معالجة صورة مختلفة
 const MAX_RETRIES = 3;
 
-// Characters allowed in the AADL CAPTCHA (alphanumeric)
-// الأحرف المسموح بها في CAPTCHA الخاصة بـ AADL (أبجدية رقمية)
-const CAPTCHA_WHITELIST =
-  '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+// ✅ تغيير مهم: الأرقام فقط لأن CAPTCHA في AADL هي أرقام
+const CAPTCHA_WHITELIST = '0123456789';
 
 /**
  * Clean the raw OCR text by keeping only allowed characters.
@@ -36,7 +34,7 @@ const CAPTCHA_WHITELIST =
 function cleanCaptchaText(text) {
   if (!text) return '';
   return text
-    .replace(/[^a-zA-Z0-9]/g, '') // remove any non-alphanumeric characters
+    .replace(/[^0-9]/g, '') // ✅ إزالة كل ما ليس رقماً
     .trim();
 }
 
@@ -77,7 +75,6 @@ async function preprocessCaptcha(inputPath, outputPath, options = {}) {
 async function runOcr(imagePath) {
   const worker = await createWorker('eng', 1, {
     logger: (m) => {
-      // Suppress verbose progress logs in production
       if (m.status === 'recognizing text') {
         console.log(`OCR progress: ${Math.round(m.progress * 100)}%`);
       }
@@ -87,8 +84,9 @@ async function runOcr(imagePath) {
 
   try {
     await worker.setParameters({
-      tessedit_char_whitelist: CAPTCHA_WHITELIST,
+      tessedit_char_whitelist: CAPTCHA_WHITELIST, // ✅ أرقام فقط
       tessedit_pageseg_mode: PSM.SINGLE_WORD,
+      tessedit_ocr_engine_mode: '3', // ✅ LSTM + Legacy
     });
 
     const {
@@ -110,8 +108,8 @@ async function runOcr(imagePath) {
  */
 async function solveCaptcha(inputPath) {
   const attempts = [];
-  const thresholds = [128, 160, 96];
-  const sharpenFlags = [true, false, true];
+  const thresholds = [128, 160, 96, 200, 80]; // ✅ إضافة المزيد من العتبات
+  const sharpenFlags = [true, false, true, false, true];
 
   for (let i = 0; i < MAX_RETRIES; i++) {
     const outputPath = path.join(
@@ -130,9 +128,10 @@ async function solveCaptcha(inputPath) {
 
       console.log(`OCR attempt ${i + 1}: "${text}" (confidence: ${confidence})`);
 
-      // Accept result if it is non-empty and confidence is above threshold
-      // قبول النتيجة إذا كانت غير فارغة وثقتها أعلى من الحد الأدنى
-      if (text && confidence >= MIN_CONFIDENCE) {
+      // ✅ قبول النتيجة إذا كانت غير فارغة وثقتها أعلى من الحد الأدنى
+      // ✅ أو إذا كانت تحتوي على أرقام فقط (حتى لو كانت الثقة منخفضة)
+      if (text && text.length >= 3 && (confidence >= MIN_CONFIDENCE || /^[0-9]+$/.test(text))) {
+        console.log(`✅ OCR accepted: "${text}" with confidence ${confidence}`);
         return { code: text, confidence, attempts };
       }
     } catch (err) {
@@ -142,9 +141,8 @@ async function solveCaptcha(inputPath) {
   }
 
   // If all retries failed but we still got some text, return the best attempt
-  // إذا فشلت جميع المحاولات لكننا حصلنا على نص ما، أرجع أفضل محاولة
   const bestAttempt = attempts
-    .filter((a) => a.text)
+    .filter((a) => a.text && a.text.length >= 3)
     .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))[0];
 
   return {
