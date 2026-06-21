@@ -1,0 +1,173 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getUserByChatId, upsertUser } from '@/lib/db';
+import {
+  sendMessage,
+  sendPhoto,
+  sendPhotoBase64,
+  answerCallbackQuery,
+  buildRunCheckKeyboard,
+} from '@/lib/telegram';
+import { rateLimit } from '@/lib/rate-limit';
+
+const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
+const RAILWAY_API_URL = process.env.RAILWAY_API_URL;
+const RAILWAY_API_SECRET = process.env.RAILWAY_API_SECRET;
+
+function validateSecret(req: NextRequest): boolean {
+  if (!WEBHOOK_SECRET) return true; // allow if not configured (dev mode)
+  const header = req.headers.get('x-telegram-bot-api-secret-token');
+  return header === WEBHOOK_SECRET;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    if (!validateSecret(req)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await req.json();
+    const message = body.message;
+    const callbackQuery = body.callback_query;
+
+    if (message && message.text && message.chat) {
+      await handleMessage(message);
+    }
+
+    if (callbackQuery && callbackQuery.message && callbackQuery.from) {
+      await handleCallback(callbackQuery);
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+  }
+}
+
+async function handleMessage(message: any) {
+  const chatId = message.chat.id;
+  const text = message.text.trim();
+
+  if (!rateLimit(`msg:${chatId}`, 30, 60_000)) {
+    await sendMessage(chatId, '⏳ Please slow down and try again in a minute.');
+    return;
+  }
+
+  if (text === '/start') {
+    await sendMessage(
+      chatId,
+      '👋 Welcome to <b>AADL Check Bot</b>.\n\nPlease send me your <b>code</b>.',
+      { force_reply: true, selective: true }
+    );
+    return;
+  }
+
+  const user = await getUserByChatId(String(chatId));
+
+  if (!user || !user.code) {
+    await upsertUser({ chat_id: String(chatId), code: text });
+    await sendMessage(
+      chatId,
+      '✅ Code saved.\n\nNow please send me your <b>password</b>.',
+      { force_reply: true, selective: true }
+    );
+    return;
+  }
+
+  if (!user.password) {
+    await upsertUser({ chat_id: String(chatId), password: text });
+    await sendMessage(
+      chatId,
+      '✅ Credentials saved securely.\n\nPress the button below to run the check.',
+      buildRunCheckKeyboard()
+    );
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    'Your credentials are already saved. Press the button below to run the check.',
+    buildRunCheckKeyboard()
+  );
+}
+
+async function handleCallback(callbackQuery: any) {
+  const chatId = callbackQuery.message.chat.id;
+  const callbackId = callbackQuery.id;
+
+  if (callbackQuery.data !== 'run_check') {
+    await answerCallbackQuery(callbackId);
+    return;
+  }
+
+  if (!rateLimit(`run:${chatId}`, 5, 60_000)) {
+    await answerCallbackQuery(callbackId, '⏳ Please wait before running another check.');
+    return;
+  }
+
+  await answerCallbackQuery(callbackId, '🔍 Running check...');
+  await sendMessage(chatId, '🔍 Running your AADL check, please wait...');
+
+  try {
+    const user = await getUserByChatId(String(chatId));
+    if (!user || !user.code || !user.password) {
+      await sendMessage(
+        chatId,
+        '⚠️ Missing credentials. Please send /start to set them up.',
+        { force_reply: true, selective: true }
+      );
+      return;
+    }
+
+    if (!RAILWAY_API_URL) {
+      await sendMessage(chatId, '⚠️ Automation service is not configured.');
+      return;
+    }
+
+    const response = await fetch(RAILWAY_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Railway-Secret': RAILWAY_API_SECRET || '',
+      },
+      body: JSON.stringify({
+        chat_id: String(chatId),
+        code: user.code,
+        password: user.password,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({
+      status: 'error',
+      message: 'Invalid response from automation service',
+    }));
+
+    if (data.status !== 'ok') {
+      await sendMessage(
+        chatId,
+        `❌ Check failed:\n<pre>${escapeHtml(data.message || 'Unknown error')}</pre>`
+      );
+      return;
+    }
+
+    const caption = '📸 Screenshot captured before CAPTCHA.';
+    if (data.image_url) {
+      await sendPhoto(chatId, data.image_url, caption);
+    } else if (data.image_base64) {
+      await sendPhotoBase64(chatId, data.image_base64, caption);
+    } else {
+      await sendMessage(chatId, '✅ Check completed but no screenshot was returned.');
+    }
+  } catch (error) {
+    console.error('Run check error:', error);
+    await sendMessage(chatId, '❌ An error occurred while running the check.');
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
