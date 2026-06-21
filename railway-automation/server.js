@@ -11,7 +11,7 @@ const cloudinary = require('./lib/cloudinary');
 const { solveCaptcha } = require('./ocr-utils');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 const RAILWAY_API_SECRET = process.env.RAILWAY_API_SECRET;
 
 // Middleware
@@ -98,13 +98,14 @@ function fileToBase64(filePath) {
  * @param {number} timeout
  */
 async function waitForCaptchaImage(page, timeout = 15000) {
-  await page.waitForSelector('#captchaImg', { state: 'visible', timeout });
+  // ✅ تم التعديل: استخدام selector الصحيح للصورة
+  await page.waitForSelector('img[src="verif_code_gen.php"]', { state: 'visible', timeout });
 
   // Ensure the image element has a valid source and non-zero dimensions
   // تأكد من أن عنصر الصورة يحتوي على مصدر صالح وأبعاد غير صفرية
   await page.waitForFunction(
     () => {
-      const img = document.querySelector('#captchaImg');
+      const img = document.querySelector('img[src="verif_code_gen.php"]');
       return img && img.naturalWidth > 0 && img.naturalHeight > 0;
     },
     { timeout }
@@ -119,7 +120,8 @@ async function waitForCaptchaImage(page, timeout = 15000) {
  * @param {string} outputPath
  */
 async function captureCaptchaImage(page, outputPath) {
-  const captchaImg = page.locator('#captchaImg');
+  // ✅ تم التعديل: استخدام selector الصحيح للصورة
+  const captchaImg = page.locator('img[src="verif_code_gen.php"]');
   await captchaImg.screenshot({ path: outputPath, type: 'png' });
 }
 
@@ -170,16 +172,11 @@ async function detectVerificationStatus(page, initialUrl) {
  * @param {string} captchaCode
  */
 async function submitFormWithCaptcha(page, captchaCode) {
-  await page.fill('#captcha', captchaCode);
+  // ✅ تم التعديل: استخدام selector الصحيح لحقل CAPTCHA
+  await page.fill('input[name="verif_code"]', captchaCode);
 
-  // Click the validation button, falling back to the first submit button
-  // اضغط على زر التحقق، مع الرجوع إلى زر الإرسال الأول
-  const validateButton = page.locator('#validateBtn');
-  if (await validateButton.count() > 0) {
-    await validateButton.click();
-  } else {
-    await page.locator('button[type="submit"]').first().click();
-  }
+  // ✅ تم التعديل: استخدام selector الصحيح لزر الإرسال
+  await page.click('input[type="submit"][name="Submit"]');
 }
 
 // Main automation endpoint
@@ -200,7 +197,10 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
+        '--single-process',
+        '--no-zygote',
       ],
+      timeout: 60000,
     });
 
     const context = await browser.newContext({
@@ -210,7 +210,7 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
     });
 
     const page = await context.newPage();
-    const initialUrl = 'https://www.aadl.com.dz/notaire/';
+    const initialUrl = 'https://www.aadl.com.dz/notaire/index.html';
 
     console.log(`[${chat_id}] Navigating to AADL notaire page...`);
     await page.goto(initialUrl, {
@@ -218,12 +218,13 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
       timeout: 30000,
     });
 
-    // Wait for form fields / انتظر حقول النموذج
-    await page.waitForSelector('#code', { timeout: 10000 });
-    await page.waitForSelector('#password', { timeout: 10000 });
+    // ✅ تم التعديل: استخدام selector الصحيح لحقول الإدخال
+    console.log(`[${chat_id}] Waiting for form fields...`);
+    await page.waitForSelector('#username', { timeout: 15000 });
+    await page.waitForSelector('#password', { timeout: 15000 });
 
     console.log(`[${chat_id}] Filling credentials...`);
-    await page.fill('#code', code);
+    await page.fill('#username', code);
     await page.fill('#password', password);
 
     // Wait for and capture the CAPTCHA image
@@ -251,7 +252,7 @@ app.post('/run', authorizeRailway, validateRunPayload, async (req, res) => {
 
     // Wait for the result to load
     // انتظر تحميل النتيجة
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(5000);
 
     // Detect success or failure
     // تحديد النجاح أو الفشل
